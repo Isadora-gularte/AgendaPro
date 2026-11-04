@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - audit/supabase-integration
+      - feature/android-v0.2-testing
   pull_request:
 
 jobs:
