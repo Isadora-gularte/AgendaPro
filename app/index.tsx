@@ -14,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import type { Session, User } from '@supabase/supabase-js';
-import { CalendarDays, Building2, UserRound, ArrowLeft, LogOut, RefreshCw } from 'lucide-react-native';
+import { CalendarDays, Building2, UserRound, ArrowLeft, LogOut, RefreshCw, Eye, EyeOff } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 
 type AccountType = 'cliente' | 'empresa';
@@ -98,19 +98,37 @@ function Field({ label, value, onChangeText, placeholder, secureTextEntry = fals
   secureTextEntry?: boolean;
   keyboardType?: KeyboardTypeOptions;
 }) {
+  const [passwordVisible, setPasswordVisible] = useState(false);
+
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={styles.input}
-        placeholder={placeholder}
-        placeholderTextColor="#95806b"
-        value={value}
-        onChangeText={onChangeText}
-        secureTextEntry={secureTextEntry}
-        keyboardType={keyboardType}
-        autoCapitalize={keyboardType === 'email-address' ? 'none' : 'sentences'}
-      />
+      <View style={styles.inputRow}>
+        <TextInput
+          style={[styles.input, secureTextEntry && styles.passwordInput]}
+          placeholder={placeholder}
+          placeholderTextColor="#95806b"
+          value={value}
+          onChangeText={onChangeText}
+          secureTextEntry={secureTextEntry && !passwordVisible}
+          keyboardType={keyboardType}
+          autoCapitalize={secureTextEntry || keyboardType === 'email-address' ? 'none' : 'sentences'}
+          autoCorrect={!secureTextEntry}
+        />
+        {secureTextEntry && (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={passwordVisible ? `Ocultar ${label.toLowerCase()}` : `Mostrar ${label.toLowerCase()}`}
+            accessibilityHint="Alterna a visualização dos caracteres digitados"
+            style={styles.passwordToggle}
+            onPress={() => setPasswordVisible((visible) => !visible)}
+          >
+            {passwordVisible
+              ? <EyeOff color="#e4b77c" size={22} />
+              : <Eye color="#e4b77c" size={22} />}
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 }
@@ -717,6 +735,10 @@ export default function Index() {
 }
 
 const styles = StyleSheet.create({
+  inputRow: { position: 'relative' },
+  passwordInput: { paddingRight: 60 },
+  passwordToggle: { position: 'absolute', top: 0, bottom: 0, right: 3, width: 50,
+    justifyContent: 'center', alignItems: 'center' },
   selectorStrip: { marginTop: 10, marginBottom: 18 },
   timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 16 },
   timeChip: { borderWidth: 1, borderColor: '#926845', paddingVertical: 11, paddingHorizontal: 12,
