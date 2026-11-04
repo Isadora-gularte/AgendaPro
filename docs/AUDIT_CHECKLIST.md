@@ -9,7 +9,7 @@
 - [x] PostgreSQL 17 ativo
 - [x] Security Advisor sem alertas
 - [x] Performance Advisor sem alertas
-- [x] Schema `public` sem tabelas
+- [x] Schema `public` inicialmente vazio; agora inclui `profiles` protegida
 - [x] Nenhum usuário cadastrado no Auth
 - [x] Nenhuma Edge Function
 - [x] Nenhum branch Supabase
@@ -31,8 +31,8 @@
 
 - [x] Usar apenas publishable key no cliente Expo.
 - [ ] Nunca usar `service_role` no aplicativo.
-- [ ] Criar tabelas somente com RLS habilitado.
-- [ ] Criar policies de ownership por `auth.uid()`.
+- [x] Criar `profiles` com RLS habilitado (novas tabelas também precisam de RLS).
+- [x] Criar policies de ownership por `auth.uid()` em `profiles`.
 - [ ] Evitar usar `user_metadata` como fonte de autorização.
 - [ ] Revisar autenticação por e-mail antes de produção.
 
@@ -44,15 +44,24 @@
 - [ ] Conectar cadastro real ao Supabase Auth.
 - [ ] Conectar login real ao Supabase Auth.
 - [ ] Implementar persistência de sessão.
-- [ ] Criar tabela `profiles` com RLS.
+- [x] Criar tabela `profiles` com RLS; testes de fluxo no app pendentes.
 - [ ] Salvar tipo de conta (`cliente` / `empresa`) de forma segura.
 - [ ] Proteger rotas autenticadas.
 - [ ] Testar cadastro → confirmação/login → sessão → logout.
 - [ ] Criar migrations versionadas no repositório.
-- [ ] Rodar Advisors novamente após alterações de banco.
+- [x] Rodar Advisors novamente após alterações de banco (sem alertas).
 
 ## Branch de trabalho
 
 `audit/supabase-integration`
 
 As alterações desta auditoria não devem ser mescladas no `main` até que o código mais recente do Codespaces esteja sincronizado e revisado.
+
+## Atualização 04/11/2026
+
+- [x] Migração Supabase `create_agendaplus_profiles_with_rls` aplicada e verificada.
+- [x] Regras de leitura, criação e atualização somente do próprio perfil.
+- [x] Dados de perfil fechados ao papel `anon`.
+- [ ] Exportar schema como migration no repositório e executar testes ponta a ponta quando Codespaces estiver sincronizado.
+
+Ver [estado do Supabase](./SUPABASE_BACKEND.md).
