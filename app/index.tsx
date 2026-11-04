@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardTypeOptions,
+  Linking,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -52,6 +53,21 @@ type Booking = {
 const money = (value: number) =>
   (value / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const time = (value: string) => new Date(value).toLocaleString('pt-BR');
+const AUTH_REDIRECT_URL = 'agendaplus://';
+
+function getLinkParameter(url: string, key: string): string | undefined {
+  for (const fragment of url.split(/[?#]/).slice(1)) {
+    for (const entry of fragment.split('&')) {
+      const equals = entry.indexOf('=');
+      if (equals >= 0 && entry.slice(0, equals) === key) {
+        try { return decodeURIComponent(entry.slice(equals + 1).replace(/\+/g, ' ')); }
+        catch { return undefined; }
+      }
+    }
+  }
+  return undefined;
+}
+
 const statusLabel: Record<Status, string> = {
   pending: 'Pendente',
   confirmed: 'Confirmado',
@@ -136,6 +152,7 @@ export default function Index() {
   const [page, setPage] = useState<Page>('inicio');
   const [tab, setTab] = useState<Tab>('servicos');
   const [registerType, setRegisterType] = useState<AccountType>('cliente');
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [company, setCompany] = useState<Company | null>(null);
   const [services, setServices] = useState<Service[]>([]);
@@ -154,6 +171,43 @@ export default function Index() {
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedHour, setSelectedHour] = useState('');
   const [availableDates] = useState(upcomingDates);
+
+  useEffect(() => {
+    let alive = true;
+    let lastProcessedUrl: string | null = null;
+    async function handleAuthUrl(url: string | null) {
+      if (!alive || !url || !url.startsWith('agendaplus:') || url === lastProcessedUrl) return;
+      lastProcessedUrl = url;
+      const error = getLinkParameter(url, 'error_description');
+      if (error) {
+        Alert.alert('Não foi possível confirmar', error.replace(/\+/g, ' '));
+        return;
+      }
+      const accessToken = getLinkParameter(url, 'access_token');
+      const refreshToken = getLinkParameter(url, 'refresh_token');
+      const code = getLinkParameter(url, 'code');
+      try {
+        if (accessToken && refreshToken) {
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: accessToken, refresh_token: refreshToken,
+          });
+          if (sessionError) throw sessionError;
+          setAwaitingConfirmation(false);
+          Alert.alert('E-mail confirmado!', 'Sua conta está pronta para uso no Agenda+.');
+        } else if (code) {
+          const { error: sessionError } = await supabase.auth.exchangeCodeForSession(code);
+          if (sessionError) throw sessionError;
+          setAwaitingConfirmation(false);
+          Alert.alert('E-mail confirmado!', 'Sua conta está pronta para uso no Agenda+.');
+        }
+      } catch (err) {
+        Alert.alert('Erro na confirmação', String((err as Error).message));
+      }
+    }
+    Linking.getInitialURL().then(handleAuthUrl).catch(() => {});
+    const linkingListener = Linking.addEventListener('url', ({ url }) => { void handleAuthUrl(url); });
+    return () => { alive = false; linkingListener.remove(); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -264,7 +318,17 @@ export default function Index() {
       });
       if (error) throw error;
       setPassword('');
-    } catch (e) { Alert.alert('Não foi possível entrar', String((e as Error).message)); }
+    } catch (e) {
+      const error = e as { message?: string; code?: string };
+      if (error.code === 'invalid_credentials') {
+        Alert.alert('Dados de acesso inválidos', 'O e-mail ou a senha não conferem. Use a senha do cadastro, sem criar outra conta.');
+      } else if (error.code === 'email_not_confirmed') {
+        setAwaitingConfirmation(true);
+        Alert.alert('Confirme seu e-mail', 'Confira sua caixa de entrada e spam. Você pode reenviar a confirmação nesta tela.');
+      } else {
+        Alert.alert('Não foi possível entrar', String(error.message ?? e));
+      }
+    }
     finally { setBusy(false); }
   }
 
@@ -277,18 +341,46 @@ export default function Index() {
     try {
       const { data, error } = await supabase.auth.signUp({
         email: email.trim().toLowerCase(), password,
-        options: { data: { full_name: name.trim(), phone: phone.trim() || null, account_type: registerType } },
+        options: {
+          emailRedirectTo: AUTH_REDIRECT_URL,
+          data: { full_name: name.trim(), phone: phone.trim() || null, account_type: registerType },
+        },
       });
       if (error) throw error;
       setPassword(''); setRepeatPassword('');
       if (!data.session) {
-        Alert.alert('Cadastro iniciado', 'Verifique sua caixa de e-mail, confirme a conta e depois faça login.');
+        setAwaitingConfirmation(true);
+        Alert.alert('Verifique seu e-mail', 'Enviamos um link de confirmação. Verifique também a pasta Spam e não use o mesmo link duas vezes.');
         setPage('login');
       } else {
         setPage('inicio');
       }
     } catch (e) { Alert.alert('Erro no cadastro', String((e as Error).message)); }
     finally { setBusy(false); }
+  }
+
+  async function resendConfirmation() {
+    if (!email.trim().includes('@')) {
+      Alert.alert('Informe seu e-mail', 'Digite o mesmo endereço que você usou no cadastro.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email.trim().toLowerCase(),
+        options: { emailRedirectTo: AUTH_REDIRECT_URL },
+      });
+      if (error) throw error;
+      Alert.alert('Solicitação enviada', 'Se a conta ainda não estiver confirmada, verifique sua caixa de entrada e Spam.');
+    } catch (e) {
+      const err = e as { message?: string; code?: string };
+      if (err.code === 'over_email_send_rate_limit') {
+        Alert.alert('Limite de envios', 'Você já pediu vários e-mails. Aguarde alguns minutos antes de tentar novamente.');
+      } else {
+        Alert.alert('Não foi possível reenviar', String(err.message ?? e));
+      }
+    } finally { setBusy(false); }
   }
 
   async function createCompany() {
@@ -431,6 +523,13 @@ export default function Index() {
                 <Field label="E-mail" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="voce@email.com" />
                 <Field label="Senha" value={password} onChangeText={setPassword} secureTextEntry placeholder="Sua senha" />
                 <Button label={busy ? 'Entrando...' : 'Entrar'} onPress={login} disabled={busy} />
+                {awaitingConfirmation && (
+                  <>
+                    <Text style={styles.muted}>Se você já confirmou o e-mail, pode entrar normalmente. Links de confirmação só funcionam uma vez.</Text>
+                    <Button label={busy ? 'Reenviando...' : 'Reenviar confirmação'} secondary
+                      onPress={resendConfirmation} disabled={busy} />
+                  </>
+                )}
                 <Button label="Ainda não tenho conta" secondary onPress={() => setPage('cadastro')} />
               </View>
             )}
