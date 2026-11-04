@@ -355,7 +355,18 @@ export default function Index() {
       } else {
         setPage('inicio');
       }
-    } catch (e) { Alert.alert('Erro no cadastro', String((e as Error).message)); }
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      if (err.code === 'over_email_send_rate_limit' || /email rate limit exceeded/i.test(err.message ?? '')) {
+        Alert.alert('Envio de e-mails temporariamente limitado',
+          'O serviço de confirmação de e-mails do Agenda+ atingiu o limite. Tente novamente mais tarde. Não é necessário mudar seu e-mail.');
+      } else if (err.code === 'email_address_not_authorized') {
+        Alert.alert('Envio de e-mails não configurado',
+          'O Agenda+ ainda está configurando o envio de e-mails para pessoas externas ao projeto. Entre em contato com a equipe de testes.');
+      } else {
+        Alert.alert('Erro no cadastro', String(err.message ?? e));
+      }
+    }
     finally { setBusy(false); }
   }
 
