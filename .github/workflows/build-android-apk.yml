@@ -1,7 +1,7 @@
 name: Build Agenda+ Android APK
 on:
   push:
-    branches: [feature/android-apk-mvp-v1]
+    branches: [feature/android-v0.2-testing]
   workflow_dispatch:
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add package-lock.json
             git commit -m "build: refresh npm lockfile for APK"
-            git push origin HEAD:feature/android-apk-mvp-v1
+            git push origin HEAD:feature/android-v0.2-testing
           fi
       - name: Install dependencies
         run: npm ci
@@ -55,10 +55,10 @@ jobs:
       - name: Compile standalone release APK (debug signing for testers)
         run: cd android && chmod +x ./gradlew && ./gradlew :app:assembleRelease --no-daemon --stacktrace
       - name: Copy APK
-        run: cp android/app/build/outputs/apk/release/app-release.apk AgendaPlus-v0.1.0-teste.apk
+        run: cp android/app/build/outputs/apk/release/app-release.apk AgendaPlus-v0.2.0-teste.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: AgendaPlus-v0.1.0-APK
-          path: AgendaPlus-v0.1.0-teste.apk
+          name: AgendaPlus-v0.2.0-APK
+          path: AgendaPlus-v0.2.0-teste.apk
           if-no-files-found: error
           retention-days: 30
