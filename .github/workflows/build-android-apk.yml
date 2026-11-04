@@ -1,0 +1,61 @@
+name: Build Agenda+ Android APK
+on:
+  push:
+    branches: [feature/android-apk-mvp-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CI: '1'
+      EXPO_PUBLIC_SUPABASE_URL: https://wpgwopmfvthrxuzilxdw.supabase.co
+      EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_aWUFcoFlyilmSLWkg3yTIg_pidO2fxU
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+      - name: Resolve pinned dependencies and refresh lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Save lockfile to APK branch
+        run: |
+          if ! git diff --quiet -- package-lock.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "build: refresh npm lockfile for APK"
+            git push origin HEAD:feature/android-apk-mvp-v1
+          fi
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify TypeScript
+        run: npm run typecheck
+      - name: Verify lint
+        run: npm run lint
+      - name: Verify Expo dependencies
+        run: npx expo install --check
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Generate Android native project
+        run: npx expo prebuild --platform android --no-install --non-interactive --clean
+      - name: Compile standalone release APK (debug signing for testers)
+        run: cd android && chmod +x ./gradlew && ./gradlew :app:assembleRelease --no-daemon --stacktrace
+      - name: Copy APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk AgendaPlus-v0.1.0-teste.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgendaPlus-v0.1.0-APK
+          path: AgendaPlus-v0.1.0-teste.apk
+          if-no-files-found: error
+          retention-days: 30
