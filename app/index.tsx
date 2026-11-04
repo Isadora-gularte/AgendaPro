@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,7 @@ import {
   View,
 } from 'react-native';
 import type { Session, User } from '@supabase/supabase-js';
-import { CalendarDays, Building2, UserRound, ArrowLeft, LogOut, RefreshCw, Eye, EyeOff } from 'lucide-react-native';
+import { CalendarDays, Building2, UserRound, ArrowLeft, LogOut, RefreshCw, Eye, EyeOff, Search, Clock3, Sparkles, CheckCircle2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 
 type AccountType = 'cliente' | 'empresa';
@@ -186,9 +186,17 @@ export default function Index() {
   const [price, setPrice] = useState('');
   const [duration, setDuration] = useState('30');
   const [selectedService, setSelectedService] = useState<Service | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedHour, setSelectedHour] = useState('');
   const [availableDates] = useState(upcomingDates);
+  const visibleServices = useMemo(() => {
+    const query = searchTerm.trim().toLocaleLowerCase('pt-BR');
+    if (!query) return services;
+    return services.filter((service) => [service.name, service.companies?.display_name]
+      .some((value) => (value || '').toLocaleLowerCase('pt-BR').includes(query)));
+  }, [searchTerm, services]);
+  const pendingCount = useMemo(() => bookings.filter((booking) => booking.status === 'pending').length, [bookings]);
 
   useEffect(() => {
     let alive = true;
@@ -275,10 +283,10 @@ export default function Index() {
       if (nextCompany) {
         const [serviceResult, bookingResult] = await Promise.all([
           supabase.from('services').select('id,company_id,name,duration_minutes,price_cents,is_active')
-            .eq('company_id', nextCompany.id).order('created_at', { ascending: false }),
+            .eq('company_id', nextCompany.id).order('created_at', { ascending: false }).limit(80),
           supabase.from('bookings')
             .select('id,service_id,client_id,client_name,starts_at,ends_at,status,services(name)')
-            .eq('company_id', nextCompany.id).order('starts_at', { ascending: false }),
+            .eq('company_id', nextCompany.id).order('starts_at', { ascending: false }).limit(100),
         ]);
         if (serviceResult.error) throw serviceResult.error;
         if (bookingResult.error) throw bookingResult.error;
@@ -292,10 +300,10 @@ export default function Index() {
       const [serviceResult, bookingResult] = await Promise.all([
         supabase.from('services')
           .select('id,company_id,name,duration_minutes,price_cents,is_active,companies(display_name)')
-          .eq('is_active', true).order('name'),
+          .eq('is_active', true).order('name').limit(80),
         supabase.from('bookings')
           .select('id,service_id,client_id,client_name,starts_at,ends_at,status,services(name),companies(display_name)')
-          .eq('client_id', user.id).order('starts_at', { ascending: false }),
+          .eq('client_id', user.id).order('starts_at', { ascending: false }).limit(100),
       ]);
       if (serviceResult.error) throw serviceResult.error;
       if (bookingResult.error) throw bookingResult.error;
@@ -441,14 +449,14 @@ export default function Index() {
     }
     setBusy(true);
     try {
-      const { error } = await supabase.from('services').insert({
+      const { data, error } = await supabase.from('services').insert({
         company_id: company.id, name: serviceName.trim(),
         price_cents: Math.round(amount * 100), duration_minutes: minutes,
-      });
+      }).select('id,company_id,name,duration_minutes,price_cents,is_active').single();
       if (error) throw error;
       setServiceName(''); setPrice(''); setDuration('30');
-      await refreshAfterAction();
-      Alert.alert('Serviço cadastrado!');
+      if (data) setServices((prev) => [data as Service, ...prev]);
+      Alert.alert('Serviço cadastrado!', 'Seu novo serviço já aparece na lista.');
     } catch (e) { Alert.alert('Erro ao criar serviço', String((e as Error).message)); }
     finally { setBusy(false); }
   }
@@ -475,7 +483,7 @@ export default function Index() {
     } catch (e) {
       const message = String((e as Error).message);
       Alert.alert('Não foi possível agendar',
-        message.includes('bookings_company_no_overlap') ?
+        message.includes('bookings_company_no_overlap') || message.includes('conflicting key value') ?
           'Este horário já está ocupado. Escolha outro horário.' : message);
     } finally { setBusy(false); }
   }
@@ -489,7 +497,8 @@ export default function Index() {
         .eq('id', service.id).select('id').single();
       if (error) throw error;
       if (!data) throw new Error('Serviço não encontrado para atualização.');
-      await refreshAfterAction();
+      setServices((prev) => prev.map((item) => item.id === service.id
+        ? { ...item, is_active: !item.is_active } : item));
     } catch (e) { Alert.alert('Não foi possível atualizar o serviço', String((e as Error).message)); }
     finally { setBusy(false); }
   }
@@ -497,9 +506,11 @@ export default function Index() {
   async function changeBookingStatus(id: string, status: Status) {
     setBusy(true);
     try {
-      const { error } = await supabase.from('bookings').update({ status }).eq('id', id);
+      const { data, error } = await supabase.from('bookings').update({ status })
+        .eq('id', id).select('id').single();
       if (error) throw error;
-      await refreshAfterAction();
+      if (!data) throw new Error('Agendamento não encontrado.');
+      setBookings((prev) => prev.map((item) => item.id === id ? { ...item, status } : item));
     } catch (e) { Alert.alert('Não foi possível atualizar', String((e as Error).message)); }
     finally { setBusy(false); }
   }
@@ -533,13 +544,15 @@ export default function Index() {
               <View style={styles.logo}><CalendarDays color="#e4b77c" size={36} /></View>
               <Text style={styles.title}>Agenda<Text style={styles.plus}>+</Text></Text>
               <Text style={styles.subtitle}>Cuidado & Organização</Text>
-              <Text style={styles.description}>Conectando empresas e clientes com praticidade.</Text>
+              <Text style={styles.description}>Conectando pessoas, serviços e bons momentos.</Text>
+              <View style={styles.heroLine}><Sparkles color="#e4b77c" size={14} /><Text style={styles.heroLineText}>Mais tempo para o que importa</Text></View>
             </View>
 
             {page === 'inicio' && (
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>Bem-vindo(a)!</Text>
-                <Text style={styles.muted}>Organize sua agenda ou encontre um serviço e reserve um horário.</Text>
+                <Text style={styles.eyebrow}>COMECE POR AQUI</Text>
+                <Text style={styles.cardTitle}>Bem-vindo(a) ao seu espaço!</Text>
+                <Text style={styles.muted}>Uma maneira mais simples de organizar atendimentos e encontrar o horário ideal.</Text>
                 <Button label="Entrar" onPress={() => setPage('login')} />
                 <Button secondary label="Criar conta" onPress={() => setPage('cadastro')} />
               </View>
@@ -548,6 +561,7 @@ export default function Index() {
             {page === 'login' && (
               <View style={styles.card}>
                 <TouchableOpacity onPress={() => setPage('inicio')} style={styles.back}><ArrowLeft color="#e4b77c" size={20} /><Text style={styles.link}>Voltar</Text></TouchableOpacity>
+                <Text style={styles.eyebrow}>BOM TER VOCÊ DE VOLTA</Text>
                 <Text style={styles.cardTitle}>Entrar na minha conta</Text>
                 <Field label="E-mail" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="voce@email.com" />
                 <Field label="Senha" value={password} onChangeText={setPassword} secureTextEntry placeholder="Sua senha" />
@@ -566,6 +580,7 @@ export default function Index() {
             {page === 'cadastro' && (
               <View style={styles.card}>
                 <TouchableOpacity onPress={() => setPage('inicio')} style={styles.back}><ArrowLeft color="#e4b77c" size={20} /><Text style={styles.link}>Voltar</Text></TouchableOpacity>
+                <Text style={styles.eyebrow}>SEU ESPAÇO, SEU RITMO</Text>
                 <Text style={styles.cardTitle}>Criar conta</Text>
                 <Text style={styles.muted}>Como você deseja usar o Agenda+?</Text>
                 <View style={styles.row}>
@@ -599,6 +614,24 @@ export default function Index() {
                 <TouchableOpacity accessibilityLabel="Sair" onPress={logout} disabled={busy}><LogOut color="#e4b77c" size={22} /></TouchableOpacity>
               </View>
             </View>
+            {profile && (
+              <View style={styles.dashboardBanner}>
+                <View style={styles.bannerIcon}>
+                  {profile.account_type === 'empresa'
+                    ? <Building2 color="#f6d29a" size={25} />
+                    : <CalendarDays color="#f6d29a" size={25} />}
+                </View>
+                <View style={styles.bannerCopy}>
+                  <Text style={styles.eyebrow}>{profile.account_type === 'empresa' ? 'SEU NEGÓCIO EM DIA' : 'SEUS HORÁRIOS EM DIA'}</Text>
+                  <Text style={styles.bannerTitle}>{profile.account_type === 'empresa'
+                    ? (company?.display_name || 'Organize seu negócio')
+                    : 'Seu tempo é precioso'}</Text>
+                  <Text style={styles.bannerDetail}>{pendingCount > 0
+                    ? `${pendingCount} agendamento${pendingCount > 1 ? 's' : ''} aguardando confirmação`
+                    : 'Tudo organizado por aqui. ✨'}</Text>
+                </View>
+              </View>
+            )}
             {!profile ? (
               <View style={styles.card}><Text style={styles.muted}>O perfil não pôde ser carregado.</Text><Button label="Tentar novamente" onPress={refresh} /></View>
             ) : (
@@ -634,14 +667,35 @@ export default function Index() {
                             <Button label={busy ? 'Salvando...' : 'Adicionar serviço'} onPress={createService} disabled={busy} />
                           </View>
                         )}
-                        <Text style={styles.sectionTitle}>{profile.account_type === 'empresa' ? 'Serviços cadastrados' : 'Serviços disponíveis'}</Text>
-                        {services.length === 0 && <Text style={styles.muted}>Nenhum serviço disponível ainda. Atualize para verificar novamente.</Text>}
-                        {services.map((service) => (
+                        <Text style={styles.sectionTitle}>{profile.account_type === 'empresa' ? 'Serviços cadastrados' : 'Encontre seu próximo horário'}</Text>
+                        {profile.account_type === 'cliente' && (
+                          <View style={styles.searchBar}>
+                            <Search color="#cfae86" size={20} />
+                            <TextInput
+                              style={styles.searchInput}
+                              value={searchTerm}
+                              onChangeText={setSearchTerm}
+                              autoCorrect={false}
+                              placeholder="Buscar serviço ou empresa"
+                              placeholderTextColor="#9e8b7a"
+                              accessibilityLabel="Buscar serviços e empresas"
+                            />
+                          </View>
+                        )}
+                        {visibleServices.length === 0 && <Text style={styles.muted}>Nenhum serviço encontrado. Atualize ou tente outra busca.</Text>}
+                        {visibleServices.map((service) => (
                           <View key={service.id} style={styles.card}>
-                            <Text style={styles.cardTitle}>{service.name}</Text>
-                            {service.companies && <Text style={styles.muted}>{service.companies.display_name}</Text>}
-                            <Text style={styles.price}>{money(service.price_cents)}</Text>
-                            <Text style={styles.muted}>{service.duration_minutes} minutos</Text>
+                            <View style={styles.serviceHeader}>
+                              <View style={styles.serviceIcon}><CalendarDays color="#e4b77c" size={23}/></View>
+                              <View style={styles.serviceTitleWrap}>
+                                <Text style={styles.cardTitle}>{service.name}</Text>
+                                {service.companies && <Text style={styles.muted}>{service.companies.display_name}</Text>}
+                              </View>
+                            </View>
+                            <View style={styles.serviceMeta}>
+                              <View style={styles.infoPill}><Clock3 color="#e4b77c" size={15}/><Text style={styles.infoText}>{service.duration_minutes} min</Text></View>
+                              <Text style={styles.price}>{money(service.price_cents)}</Text>
+                            </View>
                             {profile.account_type === 'empresa' && (
                               <>
                                 <Text style={styles.role}>{service.is_active ? 'Visível para clientes' : 'Pausado'}</Text>
@@ -701,8 +755,16 @@ export default function Index() {
                           <View key={booking.id} style={styles.card}>
                             <Text style={styles.cardTitle}>{booking.services?.name || 'Serviço'}</Text>
                             {booking.companies && <Text style={styles.muted}>{booking.companies.display_name}</Text>}
-                            <Text style={styles.date}>{time(booking.starts_at)}</Text>
-                            <Text style={styles.role}>Status: {statusLabel[booking.status]}</Text>
+                            <View style={styles.bookingTime}>
+                              <CalendarDays color="#ddb177" size={17} />
+                              <Text style={styles.date}>{time(booking.starts_at)}</Text>
+                            </View>
+                            <View style={[styles.statusPill, booking.status === 'confirmed' && styles.statusConfirmed,
+                              booking.status === 'cancelled' && styles.statusCancelled,
+                              booking.status === 'completed' && styles.statusCompleted]}>
+                              <CheckCircle2 color="#fae2bd" size={13}/>
+                              <Text style={styles.statusText}>{statusLabel[booking.status]}</Text>
+                            </View>
                             {profile.account_type === 'empresa' && <Text style={styles.muted}>Cliente: {booking.client_name || 'Não informado'}</Text>}
                             {profile.account_type === 'cliente' && (booking.status === 'pending' || booking.status === 'confirmed') &&
                               <Button secondary label="Cancelar agendamento" disabled={busy} onPress={() => changeBookingStatus(booking.id, 'cancelled')} />}
@@ -735,6 +797,37 @@ export default function Index() {
 }
 
 const styles = StyleSheet.create({
+  eyebrow: { color: '#eac18b', fontSize: 10, fontWeight: '800', letterSpacing: 1.8, marginBottom: 8 },
+  heroLine: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 16, borderRadius: 50,
+    backgroundColor: 'rgba(242,194,137,0.09)', paddingHorizontal: 17, paddingVertical: 10 },
+  heroLineText: { color: '#e6c5a2', fontSize: 12, fontWeight: '600' },
+  dashboardBanner: { flexDirection: 'row', alignItems: 'center', padding: 19, borderRadius: 22,
+    backgroundColor: '#5b3826', borderWidth: 1, borderColor: '#98673e', marginBottom: 18, gap: 13 },
+  bannerIcon: { width: 51, height: 51, borderRadius: 16, alignItems: 'center',
+    justifyContent: 'center', backgroundColor: '#754b2d' },
+  bannerCopy: { flex: 1 },
+  bannerTitle: { color: '#fff5e6', fontSize: 18, fontWeight: '700', marginBottom: 6 },
+  bannerDetail: { color: '#e6c6a7', fontSize: 12, lineHeight: 18 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#482e22',
+    borderWidth: 1, borderColor: '#826046', borderRadius: 15, paddingHorizontal: 15,
+    minHeight: 53, marginBottom: 17 },
+  searchInput: { flex: 1, color: '#fff8ee', paddingVertical: 12, fontSize: 15 },
+  serviceHeader: { flexDirection: 'row', gap: 13, alignItems: 'center', marginBottom: 7 },
+  serviceIcon: { backgroundColor: '#6c482f', width: 47, height: 47, borderRadius: 15,
+    justifyContent: 'center', alignItems: 'center' },
+  serviceTitleWrap: { flex: 1 },
+  serviceMeta: { flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginTop: 8, marginBottom: 5 },
+  infoPill: { flexDirection: 'row', alignItems: 'center', gap: 7,
+    backgroundColor: '#603f2c', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 50 },
+  infoText: { color: '#f2ddc5', fontSize: 12, fontWeight: '600' },
+  bookingTime: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 10 },
+  statusPill: { flexDirection: 'row', alignSelf: 'flex-start', gap: 7, borderRadius: 50,
+    backgroundColor: '#78552f', paddingVertical: 8, paddingHorizontal: 12, marginBottom: 12 },
+  statusConfirmed: { backgroundColor: '#3b6d53' },
+  statusCancelled: { backgroundColor: '#734544' },
+  statusCompleted: { backgroundColor: '#426b73' },
+  statusText: { color: '#fff4e5', fontSize: 12, fontWeight: '700' },
   inputRow: { position: 'relative' },
   passwordInput: { paddingRight: 60 },
   passwordToggle: { position: 'absolute', top: 0, bottom: 0, right: 3, width: 50,
@@ -745,8 +838,8 @@ const styles = StyleSheet.create({
     borderRadius: 9, backgroundColor: '#453020', marginRight: 8 },
   timeChipActive: { backgroundColor: '#986c40', borderColor: '#e4b77c' },
   timeChipText: { color: '#fff1df', fontSize: 13, fontWeight: '600' },
-  container: { flex: 1, backgroundColor: '#382317' },
-  content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 28, paddingBottom: 48 },
+  container: { flex: 1, backgroundColor: '#2a1c18' },
+  content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 23, paddingBottom: 46 },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 18 },
   brand: { alignItems: 'center', marginBottom: 28, marginTop: 18 },
   logo: { width: 76, height: 76, borderRadius: 38, borderColor: '#aa7f50', borderWidth: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#50321f', marginBottom: 12 },
@@ -755,17 +848,17 @@ const styles = StyleSheet.create({
   titleSmall: { fontSize: 33, fontWeight: '400', color: '#fff9ed' },
   subtitle: { fontSize: 19, color: '#d8a566' },
   description: { color: '#e1d2c2', textAlign: 'center', marginTop: 15, lineHeight: 23, maxWidth: 280 },
-  card: { backgroundColor: '#50321f', borderWidth: 1, borderColor: '#795438', borderRadius: 18, padding: 18, marginBottom: 15 },
-  cardTitle: { color: '#fff8ee', fontSize: 19, fontWeight: '700', marginBottom: 10 },
+  card: { backgroundColor: '#422b22', borderWidth: 1, borderColor: '#654832', borderRadius: 21, padding: 19, marginBottom: 15 },
+  cardTitle: { color: '#fff8ee', fontSize: 18, fontWeight: '700', marginBottom: 7 },
   muted: { color: '#dac6af', fontSize: 14, lineHeight: 20, marginBottom: 10 },
-  button: { backgroundColor: '#d4a263', paddingVertical: 14, paddingHorizontal: 15, borderRadius: 10, alignItems: 'center', marginTop: 13 },
+  button: { backgroundColor: '#e4b77c', paddingVertical: 16, paddingHorizontal: 16, borderRadius: 15, alignItems: 'center', marginTop: 12, elevation: 1 },
   buttonText: { color: '#26170f', fontSize: 15, fontWeight: '700' },
   buttonOutline: { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#c18b50' },
   buttonOutlineText: { color: '#f8e8d3' },
   disabled: { opacity: 0.5 },
   field: { marginTop: 11 },
   fieldLabel: { color: '#f5e8d7', fontSize: 13, marginBottom: 6 },
-  input: { borderColor: '#896343', borderWidth: 1, borderRadius: 9, backgroundColor: '#3c291e', color: '#fff7ed', padding: 13, fontSize: 15 },
+  input: { borderColor: '#7b5842', borderWidth: 1, borderRadius: 13, backgroundColor: '#33221c', color: '#fff7ed', padding: 15, fontSize: 15, minHeight: 52 },
   back: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 7 },
   link: { color: '#e4b77c' },
   row: { flexDirection: 'row', gap: 10, marginTop: 13, marginBottom: 10 },
@@ -776,11 +869,11 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: 'row', gap: 20, paddingTop: 14 },
   role: { color: '#e9b978', fontWeight: '600', marginBottom: 8 },
   tabRow: { flexDirection: 'row', marginBottom: 18, gap: 9 },
-  tab: { flex: 1, alignItems: 'center', backgroundColor: '#50321f', borderRadius: 9, paddingVertical: 14 },
-  tabSelected: { backgroundColor: '#986c40' },
+  tab: { flex: 1, alignItems: 'center', backgroundColor: '#422b22', borderRadius: 13, paddingVertical: 15, borderWidth: 1, borderColor: '#74513a' },
+  tabSelected: { backgroundColor: '#84552e', borderColor: '#e6ad6f' },
   tabText: { color: '#fff4e3', fontWeight: '700', fontSize: 13 },
   sectionTitle: { fontSize: 20, color: '#fff4e3', fontWeight: '700', marginBottom: 13 },
-  price: { fontSize: 18, fontWeight: '700', color: '#f3c78c', marginTop: 6, marginBottom: 7 },
-  date: { fontSize: 16, fontWeight: '600', color: '#fff1df', marginBottom: 8 },
+  price: { fontSize: 20, fontWeight: '800', color: '#f3c78c' },
+  date: { fontSize: 15, fontWeight: '600', color: '#fff1df' },
   footer: { marginTop: 25, textAlign: 'center', color: '#aa927d', fontSize: 12 },
 });
