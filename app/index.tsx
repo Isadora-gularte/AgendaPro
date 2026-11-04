@@ -34,12 +34,14 @@ type Service = {
   name: string;
   duration_minutes: number;
   price_cents: number;
+  is_active: boolean;
   companies?: { display_name: string } | null;
 };
 type Booking = {
   id: string;
   service_id: string;
   client_id: string;
+  client_name: string | null;
   starts_at: string;
   ends_at: string;
   status: Status;
@@ -97,6 +99,26 @@ function Field({ label, value, onChangeText, placeholder, secureTextEntry = fals
   );
 }
 
+function formatDateKey(value: Date): string {
+  return [
+    value.getFullYear(),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+const appointmentHours = ['09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30','13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30','17:00','17:30'];
+
+function upcomingDates(): { key: string; label: string }[] {
+  return Array.from({ length: 14 }, (_, index) => {
+    const current = new Date();
+    current.setHours(12, 0, 0, 0);
+    current.setDate(current.getDate() + index);
+    return { key: formatDateKey(current),
+      label: current.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' }) };
+  });
+}
+
 function parseLocalDate(date: string, hour: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(hour)) return null;
   const [y, m, d] = date.split('-').map(Number);
@@ -131,6 +153,7 @@ export default function Index() {
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedHour, setSelectedHour] = useState('');
+  const [availableDates] = useState(upcomingDates);
 
   useEffect(() => {
     let alive = true;
@@ -179,10 +202,10 @@ export default function Index() {
       setCompany(nextCompany);
       if (nextCompany) {
         const [serviceResult, bookingResult] = await Promise.all([
-          supabase.from('services').select('id,company_id,name,duration_minutes,price_cents')
+          supabase.from('services').select('id,company_id,name,duration_minutes,price_cents,is_active')
             .eq('company_id', nextCompany.id).order('created_at', { ascending: false }),
           supabase.from('bookings')
-            .select('id,service_id,client_id,starts_at,ends_at,status,services(name)')
+            .select('id,service_id,client_id,client_name,starts_at,ends_at,status,services(name)')
             .eq('company_id', nextCompany.id).order('starts_at', { ascending: false }),
         ]);
         if (serviceResult.error) throw serviceResult.error;
@@ -196,10 +219,10 @@ export default function Index() {
       setCompany(null);
       const [serviceResult, bookingResult] = await Promise.all([
         supabase.from('services')
-          .select('id,company_id,name,duration_minutes,price_cents,companies(display_name)')
+          .select('id,company_id,name,duration_minutes,price_cents,is_active,companies(display_name)')
           .eq('is_active', true).order('name'),
         supabase.from('bookings')
-          .select('id,service_id,client_id,starts_at,ends_at,status,services(name),companies(display_name)')
+          .select('id,service_id,client_id,client_name,starts_at,ends_at,status,services(name),companies(display_name)')
           .eq('client_id', user.id).order('starts_at', { ascending: false }),
       ]);
       if (serviceResult.error) throw serviceResult.error;
@@ -334,6 +357,20 @@ export default function Index() {
         message.includes('bookings_company_no_overlap') ?
           'Este horário já está ocupado. Escolha outro horário.' : message);
     } finally { setBusy(false); }
+  }
+
+  async function toggleService(service: Service) {
+    if (profile?.account_type !== 'empresa') return;
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.from('services')
+        .update({ is_active: !service.is_active })
+        .eq('id', service.id).select('id').single();
+      if (error) throw error;
+      if (!data) throw new Error('Serviço não encontrado para atualização.');
+      await refreshAfterAction();
+    } catch (e) { Alert.alert('Não foi possível atualizar o serviço', String((e as Error).message)); }
+    finally { setBusy(false); }
   }
 
   async function changeBookingStatus(id: string, status: Status) {
@@ -477,6 +514,14 @@ export default function Index() {
                             {service.companies && <Text style={styles.muted}>{service.companies.display_name}</Text>}
                             <Text style={styles.price}>{money(service.price_cents)}</Text>
                             <Text style={styles.muted}>{service.duration_minutes} minutos</Text>
+                            {profile.account_type === 'empresa' && (
+                              <>
+                                <Text style={styles.role}>{service.is_active ? 'Visível para clientes' : 'Pausado'}</Text>
+                                <Button secondary disabled={busy}
+                                  label={service.is_active ? 'Pausar serviço' : 'Reativar serviço'}
+                                  onPress={() => toggleService(service)} />
+                              </>
+                            )}
                             {profile.account_type === 'cliente' && (
                               <Button label="Reservar horário" onPress={() => { setSelectedService(service); setSelectedDate(''); setSelectedHour(''); }} />
                             )}
@@ -486,10 +531,34 @@ export default function Index() {
                           <View style={styles.card}>
                             <Text style={styles.cardTitle}>Agendar: {selectedService.name}</Text>
                             <Text style={styles.muted}>Escolha uma data e um horário no fuso do seu celular.</Text>
-                            <Field label="Data (AAAA-MM-DD)" value={selectedDate} onChangeText={setSelectedDate} placeholder="2026-12-10" />
-                            <Field label="Horário (HH:MM)" value={selectedHour} onChangeText={setSelectedHour} placeholder="14:30" />
-                            <Text style={styles.muted}>A empresa confirmará a solicitação. Horários ocupados são bloqueados automaticamente.</Text>
-                            <Button label={busy ? 'Agendando...' : 'Confirmar solicitação'} disabled={busy} onPress={book} />
+                            <Text style={styles.fieldLabel}>Escolha a data</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorStrip}>
+                              {availableDates.map((date) => (
+                                <TouchableOpacity key={date.key}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ selected: selectedDate === date.key }}
+                                  onPress={() => { setSelectedDate(date.key); setSelectedHour(''); }}
+                                  style={[styles.timeChip, selectedDate === date.key && styles.timeChipActive]}>
+                                  <Text style={styles.timeChipText}>{date.label}</Text>
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                            <Text style={styles.fieldLabel}>Escolha o horário</Text>
+                            <View style={styles.timeGrid}>
+                              {appointmentHours.map((hour) => (
+                                <TouchableOpacity key={hour}
+                                  disabled={!selectedDate}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ selected: selectedHour === hour, disabled: !selectedDate }}
+                                  onPress={() => setSelectedHour(hour)}
+                                  style={[styles.timeChip, selectedHour === hour && styles.timeChipActive,
+                                    !selectedDate && styles.disabled]}>
+                                  <Text style={styles.timeChipText}>{hour}</Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                            <Text style={styles.muted}>Estes são horários de preferência, não disponibilidade confirmada. A empresa confirmará a solicitação. Horários ocupados são bloqueados automaticamente.</Text>
+                            <Button label={busy ? 'Agendando...' : 'Confirmar solicitação'} disabled={busy || !selectedDate || !selectedHour} onPress={book} />
                             <Button secondary label="Cancelar escolha" onPress={() => setSelectedService(null)} />
                           </View>
                         )}
@@ -506,7 +575,7 @@ export default function Index() {
                             {booking.companies && <Text style={styles.muted}>{booking.companies.display_name}</Text>}
                             <Text style={styles.date}>{time(booking.starts_at)}</Text>
                             <Text style={styles.role}>Status: {statusLabel[booking.status]}</Text>
-                            {profile.account_type === 'empresa' && <Text style={styles.muted}>Cliente #{booking.client_id.slice(0, 8)}</Text>}
+                            {profile.account_type === 'empresa' && <Text style={styles.muted}>Cliente: {booking.client_name || 'Não informado'}</Text>}
                             {profile.account_type === 'cliente' && (booking.status === 'pending' || booking.status === 'confirmed') &&
                               <Button secondary label="Cancelar agendamento" disabled={busy} onPress={() => changeBookingStatus(booking.id, 'cancelled')} />}
                             {profile.account_type === 'empresa' && booking.status === 'pending' && (
@@ -531,13 +600,19 @@ export default function Index() {
             )}
           </>
         )}
-        <Text style={styles.footer}>Agenda+ · Primeira versão Android para testes</Text>
+        <Text style={styles.footer}>Agenda+ · Versão 0.2.0 de desenvolvimento</Text>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  selectorStrip: { marginTop: 10, marginBottom: 18 },
+  timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 16 },
+  timeChip: { borderWidth: 1, borderColor: '#926845', paddingVertical: 11, paddingHorizontal: 12,
+    borderRadius: 9, backgroundColor: '#453020', marginRight: 8 },
+  timeChipActive: { backgroundColor: '#986c40', borderColor: '#e4b77c' },
+  timeChipText: { color: '#fff1df', fontSize: 13, fontWeight: '600' },
   container: { flex: 1, backgroundColor: '#382317' },
   content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 28, paddingBottom: 48 },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 18 },
