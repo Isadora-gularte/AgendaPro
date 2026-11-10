@@ -1,0 +1,39 @@
+name: Publish Android v0.2.0 prerelease
+on:
+  push:
+    branches: [feature/android-v0.2-testing]
+    paths:
+      - '.github/workflows/publish-android-v0.2.0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download verified Android APK build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p android-apk
+          gh run download 41846960564 --repo "${{ github.repository }}" --name AgendaPlus-v0.2.0-APK --dir android-apk
+          test -s android-apk/AgendaPlus-v0.2.0-teste.apk
+          mv android-apk/AgendaPlus-v0.2.0-teste.apk AgendaPlus-v0.2.0.apk
+          sha256sum AgendaPlus-v0.2.0.apk
+      - name: Publish public testing prerelease for Android
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.2.0 --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload v0.2.0 AgendaPlus-v0.2.0.apk --clobber --repo "${{ github.repository }}"
+          else
+            gh release create v0.2.0 AgendaPlus-v0.2.0.apk \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --prerelease \
+              --title "Agenda+ v0.2.0 — Android (teste)" \
+              --notes "APK Android independente para testes. Inclui melhorias no design, busca por serviços, olhinho de senha, mensagens de autenticação e otimizações na atualização de dados. A confirmação por e-mail ainda depende da configuração de SMTP no Supabase. Esta compilação usa assinatura de testes e não é lançamento da Play Store."
+          fi
