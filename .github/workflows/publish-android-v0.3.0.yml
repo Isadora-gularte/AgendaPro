@@ -1,0 +1,39 @@
+name: Publish Agenda+ v0.3.0 Android APK
+on:
+  push:
+    branches: [feature/agenda-perfil-busca-v0.3.0]
+    paths:
+      - '.github/workflows/publish-android-v0.3.0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download successful v0.3.0 APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p android-apk
+          gh run download 44415270996 --repo "${{ github.repository }}" --name AgendaPlus-v0.3.0-APK --dir android-apk
+          test -s android-apk/AgendaPlus-v0.3.0-teste.apk
+          mv android-apk/AgendaPlus-v0.3.0-teste.apk AgendaPlus-v0.3.0.apk
+          sha256sum AgendaPlus-v0.3.0.apk
+      - name: Publish APK on public GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.0 --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload v0.3.0 AgendaPlus-v0.3.0.apk --clobber --repo "${{ github.repository }}"
+          else
+            gh release create v0.3.0 AgendaPlus-v0.3.0.apk \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --prerelease \
+              --title "Agenda+ v0.3.0 — Android para testes" \
+              --notes "APK Android independente, com pesquisa de empresas, endereço com link para Google Maps, perfil com foto e gerenciamento de agendamentos. A confirmação de e-mail requer configurar o redirect URL agendaplus://confirmacao e o serviço SMTP no Supabase. Versão de testes, não assinada para a Play Store."
+          fi
