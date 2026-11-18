@@ -938,8 +938,9 @@ export default function Index() {
                           <View style={styles.card}>
                             <Text style={styles.cardTitle}>Agendar: {selectedService.name}</Text>
                             <Text style={styles.muted}>{selectedService.companies?.display_name || ''}</Text>
-                            {selectedService.companies &&
+                            {selectedService.companies && (
                               <Text style={styles.addressText}>{companyAddress(selectedService.companies)}</Text>
+                            )}
                             <Text style={styles.muted}>Escolha uma data e um horário no fuso do seu celular.</Text>
                             <Text style={styles.fieldLabel}>Escolha a data</Text>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorStrip}>
