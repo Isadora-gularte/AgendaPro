@@ -20,7 +20,7 @@ import { CalendarDays, Building2, UserRound, ArrowLeft, LogOut, RefreshCw, Eye, 
 import { supabase } from '../lib/supabase';
 
 type AccountType = 'cliente' | 'empresa';
-type Page = 'inicio' | 'login' | 'cadastro';
+type Page = 'inicio' | 'login' | 'cadastro' | 'aguardando';
 type Tab = 'servicos' | 'agenda' | 'perfil';
 type Status = 'pending' | 'confirmed' | 'cancelled' | 'completed';
 
@@ -464,8 +464,7 @@ export default function Index() {
       setPassword(''); setRepeatPassword('');
       if (!data.session) {
         setAwaitingConfirmation(true);
-        Alert.alert('Verifique seu e-mail', 'Enviamos um link de confirmação. Verifique também a pasta Spam e não use o mesmo link duas vezes.');
-        setPage('login');
+        setPage('aguardando');
       } else {
         setPage('inicio');
       }
@@ -607,7 +606,7 @@ export default function Index() {
     finally { setBusy(false); }
   }
 
-  function AddressFields() {
+  function renderAddressFields() {
     return (
       <>
         <Field label="Rua / Avenida" value={street} onChangeText={setStreet} placeholder="Ex.: Rua XV de Novembro" />
@@ -702,7 +701,7 @@ export default function Index() {
     try {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      setPage('inicio'); setTab('servicos');
+      setPage('inicio'); setTab('servicos'); setSearchTerm('');
       setSelectedService(null);
     } catch (e) { Alert.alert('Erro ao sair', String((e as Error).message)); }
     finally { setBusy(false); }
@@ -740,6 +739,18 @@ export default function Index() {
               </View>
             )}
 
+            {page === 'aguardando' && (
+              <View style={styles.card}>
+                <View style={styles.successCircle}><CheckCircle2 color="#e4b77c" size={40} /></View>
+                <Text style={styles.eyebrow}>ÚLTIMA ETAPA</Text>
+                <Text style={styles.cardTitle}>Confirme seu e-mail</Text>
+                <Text style={styles.muted}>Sua solicitação de cadastro foi recebida. Abra a mensagem enviada para {email.trim()} e toque no link de confirmação. Quando o endereço estiver autorizado no Supabase, ele abrirá a tela de confirmação do Agenda+.</Text>
+                <Text style={styles.muted}>Se o link já foi usado, tente entrar normalmente. Não crie várias contas para resolver um link expirado.</Text>
+                <Button label="Já confirmei · Entrar" onPress={() => setPage('login')} />
+                <Button label={busy ? 'Reenviando...' : 'Reenviar confirmação'} secondary disabled={busy} onPress={resendConfirmation} />
+                <Button label="Voltar ao início" secondary onPress={() => setPage('inicio')} />
+              </View>
+            )}
             {page === 'login' && (
               <View style={styles.card}>
                 <TouchableOpacity onPress={() => setPage('inicio')} style={styles.back}><ArrowLeft color="#e4b77c" size={20} /><Text style={styles.link}>Voltar</Text></TouchableOpacity>
@@ -755,6 +766,7 @@ export default function Index() {
                       onPress={resendConfirmation} disabled={busy} />
                   </>
                 )}
+                <Button label="Reenviar e-mail de confirmação" secondary disabled={busy} onPress={resendConfirmation} />
                 <Button label="Ainda não tenho conta" secondary onPress={() => setPage('cadastro')} />
               </View>
             )}
@@ -824,6 +836,8 @@ export default function Index() {
                     <Text style={styles.muted}>Depois você poderá anunciar serviços e acompanhar a agenda.</Text>
                     <Field label="Nome da empresa" value={companyName} onChangeText={setCompanyName} placeholder="Ex.: Salão Bela Vida" />
                     <Field label="Categoria" value={category} onChangeText={setCategory} placeholder="Ex.: Beleza e estética" />
+                    <Text style={styles.sectionTitle}>Onde sua empresa atende?</Text>
+                    {renderAddressFields()}
                     <Button label={busy ? 'Salvando...' : 'Cadastrar empresa'} onPress={createCompany} disabled={busy} />
                   </View>
                 ) : (
@@ -833,7 +847,10 @@ export default function Index() {
                         <Text style={styles.tabText}>{profile.account_type === 'empresa' ? 'Meus serviços' : 'Buscar serviços'}</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={[styles.tab, tab === 'agenda' && styles.tabSelected]} onPress={() => setTab('agenda')}>
-                        <Text style={styles.tabText}>Agendamentos</Text>
+                        <Text style={styles.tabText}>Agenda</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.tab, tab === 'perfil' && styles.tabSelected]} onPress={() => setTab('perfil')}>
+                        <Text style={styles.tabText}>Meu perfil</Text>
                       </TouchableOpacity>
                     </View>
 
@@ -849,7 +866,9 @@ export default function Index() {
                             <Button label={busy ? 'Salvando...' : 'Adicionar serviço'} onPress={createService} disabled={busy} />
                           </View>
                         )}
-                        <Text style={styles.sectionTitle}>{profile.account_type === 'empresa' ? 'Serviços cadastrados' : 'Encontre seu próximo horário'}</Text>
+                        <Text style={styles.sectionTitle}>{profile.account_type === 'empresa' ? 'Serviços cadastrados' : 'Encontre uma empresa'}</Text>
+                        {profile.account_type === 'cliente' &&
+                          <Text style={styles.muted}>Digite o nome da clínica, do estabelecimento ou do serviço. Nada será exibido antes da sua pesquisa.</Text>}
                         {profile.account_type === 'cliente' && (
                           <View style={styles.searchBar}>
                             <Search color="#cfae86" size={20} />
@@ -858,13 +877,24 @@ export default function Index() {
                               value={searchTerm}
                               onChangeText={setSearchTerm}
                               autoCorrect={false}
-                              placeholder="Buscar serviço ou empresa"
+                              placeholder="Ex.: Clínica Psicologia Isadora"
                               placeholderTextColor="#9e8b7a"
                               accessibilityLabel="Buscar serviços e empresas"
                             />
                           </View>
                         )}
-                        {visibleServices.length === 0 && <Text style={styles.muted}>Nenhum serviço encontrado. Atualize ou tente outra busca.</Text>}
+                        {profile.account_type === 'cliente' && searchTerm.trim().length < 2 &&
+                          <View style={styles.searchEmpty}><Search color="#e4b77c" size={30}/>
+                            <Text style={styles.emptyTitle}>O que você procura?</Text>
+                            <Text style={styles.muted}>Pesquise pelo nome da empresa ou pelo atendimento. Só mostraremos resultados correspondentes.</Text>
+                          </View>}
+                        {profile.account_type === 'cliente' && searching &&
+                          <View style={styles.loadingInline}><ActivityIndicator color="#e4b77c"/><Text style={styles.muted}>Pesquisando...</Text></View>}
+                        {!!searchError && <Text style={styles.muted}>{searchError}</Text>}
+                        {profile.account_type === 'cliente' && searchTerm.trim().length >= 2 && !searching && !searchError && visibleServices.length === 0 &&
+                          <Text style={styles.muted}>Nenhum resultado para essa pesquisa. Confira o nome da empresa.</Text>}
+                        {profile.account_type === 'empresa' && visibleServices.length === 0 &&
+                          <Text style={styles.muted}>Sua empresa ainda não possui serviços cadastrados.</Text>}
                         {visibleServices.map((service) => (
                           <View key={service.id} style={styles.card}>
                             <View style={styles.serviceHeader}>
@@ -874,6 +904,19 @@ export default function Index() {
                                 {service.companies && <Text style={styles.muted}>{service.companies.display_name}</Text>}
                               </View>
                             </View>
+                            {profile.account_type === 'cliente' && service.companies &&
+                              <View style={styles.addressCard}>
+                                <MapPin color="#e4b77c" size={17}/>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.addressText}>{companyAddress(service.companies) || 'Endereço ainda não informado pela empresa'}</Text>
+                                  {!!companyAddress(service.companies) &&
+                                    <TouchableOpacity onPress={() => openCompanyMap(service.companies)}
+                                      accessibilityRole="button" style={styles.mapLink}>
+                                      <Text style={styles.link}>Ver localização no Google Maps</Text>
+                                      <ExternalLink color="#e4b77c" size={15}/>
+                                    </TouchableOpacity>}
+                                </View>
+                              </View>}
                             <View style={styles.serviceMeta}>
                               <View style={styles.infoPill}><Clock3 color="#e4b77c" size={15}/><Text style={styles.infoText}>{service.duration_minutes} min</Text></View>
                               <Text style={styles.price}>{money(service.price_cents)}</Text>
@@ -894,6 +937,9 @@ export default function Index() {
                         {profile.account_type === 'cliente' && selectedService && (
                           <View style={styles.card}>
                             <Text style={styles.cardTitle}>Agendar: {selectedService.name}</Text>
+                            <Text style={styles.muted}>{selectedService.companies?.display_name || ''}</Text>
+                            {selectedService.companies &&
+                              <Text style={styles.addressText}>{companyAddress(selectedService.companies)}</Text>
                             <Text style={styles.muted}>Escolha uma data e um horário no fuso do seu celular.</Text>
                             <Text style={styles.fieldLabel}>Escolha a data</Text>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorStrip}>
@@ -929,6 +975,51 @@ export default function Index() {
                       </>
                     )}
 
+                    {tab === 'perfil' && (
+                      <View style={styles.card}>
+                        <Text style={styles.eyebrow}>MINHA CONTA</Text>
+                        <Text style={styles.cardTitle}>Meu perfil</Text>
+                        <View style={styles.profileHero}>
+                          <View style={styles.avatarCircle}>
+                            {avatarUrl
+                              ? <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+                              : <UserCircle2 color="#f2ca92" size={56} />}
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.bannerTitle}>{profile.full_name}</Text>
+                            <Text style={styles.muted}>{session.user.email || 'E-mail não informado'}</Text>
+                            <Button label={busy ? 'Salvando foto...' : 'Alterar foto'} secondary
+                              disabled={busy} onPress={uploadAvatar} />
+                          </View>
+                        </View>
+                        <Field label="Nome completo" value={profileName} onChangeText={setProfileName} />
+                        <Field label="Telefone" value={profilePhone} onChangeText={setProfilePhone}
+                          keyboardType="phone-pad" placeholder="Seu telefone" />
+                        <Text style={styles.muted}>Conta: {profile.account_type === 'empresa' ? 'Empresa' : 'Cliente'}</Text>
+                        <Button label={busy ? 'Salvando...' : 'Salvar meus dados'} onPress={saveMyProfile} disabled={busy} />
+                        <View style={styles.profileStats}>
+                          <View style={styles.statBox}>
+                            <Text style={styles.statNumber}>{bookings.length}</Text>
+                            <Text style={styles.statLabel}>Agendamentos</Text>
+                          </View>
+                          <View style={styles.statBox}>
+                            <Text style={styles.statNumber}>{pendingCount}</Text>
+                            <Text style={styles.statLabel}>Pendentes</Text>
+                          </View>
+                        </View>
+                        <Button label="Ver meus agendamentos" secondary onPress={() => setTab('agenda')} />
+                        {profile.account_type === 'empresa' && company && (
+                          <View style={styles.addressEditor}>
+                            <Text style={styles.sectionTitle}>Endereço do estabelecimento</Text>
+                            <Text style={styles.muted}>O endereço ficará visível para quem pesquisar por seus serviços. Use apenas o endereço comercial que deseja divulgar.</Text>
+                            {renderAddressFields()}
+                            <Button label={busy ? 'Salvando...' : 'Salvar endereço'} disabled={busy} onPress={saveCompanyAddress} />
+                            {!!companyAddress(company) &&
+                              <Button label="Conferir no Google Maps" secondary onPress={() => openCompanyMap(company)} />}
+                          </View>
+                        )}
+                      </View>
+                    )}
                     {tab === 'agenda' && (
                       <>
                         <Text style={styles.sectionTitle}>Seus agendamentos</Text>
@@ -972,13 +1063,32 @@ export default function Index() {
             )}
           </>
         )}
-        <Text style={styles.footer}>Agenda+ · Versão 0.2.0 de desenvolvimento</Text>
+        <Text style={styles.footer}>Agenda+ · Versão 0.3.0 de testes</Text>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  successCircle: { width: 70, height: 70, borderRadius: 35, alignItems: 'center',
+    justifyContent: 'center', marginBottom: 18, backgroundColor: '#6e4d30' },
+  searchEmpty: { borderWidth: 1, borderColor: '#72513b', borderStyle: 'dashed',
+    paddingHorizontal: 22, paddingVertical: 32, borderRadius: 20, alignItems: 'center', gap: 12, marginBottom: 20 },
+  emptyTitle: { color: '#fff8ee', fontSize: 18, fontWeight: '700' },
+  loadingInline: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  addressCard: { backgroundColor: '#38251d', padding: 14, borderRadius: 13,
+    flexDirection: 'row', gap: 10, marginTop: 8 },
+  addressText: { color: '#e0c9b4', fontSize: 13, lineHeight: 19 },
+  mapLink: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 9 },
+  profileHero: { flexDirection: 'row', gap: 16, alignItems: 'center', marginTop: 14, marginBottom: 20 },
+  avatarCircle: { width: 92, height: 92, borderRadius: 46, backgroundColor: '#61432e',
+    justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  avatarImage: { width: 92, height: 92 },
+  profileStats: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  statBox: { backgroundColor: '#5a3e2c', flex: 1, borderRadius: 14, padding: 15, alignItems: 'center' },
+  statNumber: { fontSize: 25, fontWeight: '800', color: '#f3d3a5' },
+  statLabel: { fontSize: 12, color: '#e6cead', marginTop: 5 },
+  addressEditor: { borderTopWidth: 1, borderTopColor: '#74513a', paddingTop: 22, marginTop: 23 },
   eyebrow: { color: '#eac18b', fontSize: 10, fontWeight: '800', letterSpacing: 1.8, marginBottom: 8 },
   heroLine: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 16, borderRadius: 50,
     backgroundColor: 'rgba(242,194,137,0.09)', paddingHorizontal: 17, paddingVertical: 10 },
@@ -1053,7 +1163,7 @@ const styles = StyleSheet.create({
   tabRow: { flexDirection: 'row', marginBottom: 18, gap: 9 },
   tab: { flex: 1, alignItems: 'center', backgroundColor: '#422b22', borderRadius: 13, paddingVertical: 15, borderWidth: 1, borderColor: '#74513a' },
   tabSelected: { backgroundColor: '#84552e', borderColor: '#e6ad6f' },
-  tabText: { color: '#fff4e3', fontWeight: '700', fontSize: 13 },
+  tabText: { color: '#fff4e3', fontWeight: '700', fontSize: 12 },
   sectionTitle: { fontSize: 20, color: '#fff4e3', fontWeight: '700', marginBottom: 13 },
   price: { fontSize: 20, fontWeight: '800', color: '#f3c78c' },
   date: { fontSize: 15, fontWeight: '600', color: '#fff1df' },
