@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardTypeOptions,
   Linking,
   SafeAreaView,
@@ -13,13 +14,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import type { Session, User } from '@supabase/supabase-js';
-import { CalendarDays, Building2, UserRound, ArrowLeft, LogOut, RefreshCw, Eye, EyeOff, Search, Clock3, Sparkles, CheckCircle2 } from 'lucide-react-native';
+import { CalendarDays, Building2, UserRound, ArrowLeft, LogOut, RefreshCw, Eye, EyeOff, Search, Clock3, Sparkles, CheckCircle2, MapPin, Camera, UserCircle2, ExternalLink } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 
 type AccountType = 'cliente' | 'empresa';
 type Page = 'inicio' | 'login' | 'cadastro';
-type Tab = 'servicos' | 'agenda';
+type Tab = 'servicos' | 'agenda' | 'perfil';
 type Status = 'pending' | 'confirmed' | 'cancelled' | 'completed';
 
 type Profile = {
@@ -27,8 +29,36 @@ type Profile = {
   full_name: string;
   phone: string | null;
   account_type: AccountType;
+  avatar_path: string | null;
 };
-type Company = { id: string; display_name: string; category: string };
+type Company = { id: string; display_name: string; category: string;
+  street: string | null; street_number: string | null;
+  neighborhood: string | null; city: string | null;
+  state: string | null; postal_code: string | null; address_extra: string | null;
+};
+type CompanyLocation = Pick<Company, 'street' | 'street_number' | 'neighborhood' | 'city' | 'state' | 'postal_code' | 'address_extra'>;
+function companyAddress(company: CompanyLocation | null | undefined): string {
+  if (!company) return '';
+  return [
+    [company.street, company.street_number].filter(Boolean).join(', '),
+    company.address_extra,
+    company.neighborhood,
+    [company.city, company.state].filter(Boolean).join(' - '),
+    company.postal_code ? `CEP ${company.postal_code}` : '',
+  ].filter(Boolean).join(' · ');
+}
+async function openCompanyMap(company: CompanyLocation | null | undefined) {
+  const location = companyAddress(company);
+  if (!location) return Alert.alert('Endereço não informado', 'Esta empresa ainda não cadastrou o endereço.');
+  try {
+    await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      [
+        [company?.street, company?.street_number].filter(Boolean).join(', '),
+        company?.neighborhood, company?.city, company?.state, company?.postal_code,
+      ].filter(Boolean).join(', ')
+    )}`);
+  } catch { Alert.alert('Não foi possível abrir o mapa', 'Confira se há um navegador instalado no celular.'); }
+}
 type Service = {
   id: string;
   company_id: string;
@@ -36,7 +66,7 @@ type Service = {
   duration_minutes: number;
   price_cents: number;
   is_active: boolean;
-  companies?: { display_name: string } | null;
+  companies?: (CompanyLocation & { display_name: string }) | null;
 };
 type Booking = {
   id: string;
@@ -53,7 +83,7 @@ type Booking = {
 const money = (value: number) =>
   (value / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const time = (value: string) => new Date(value).toLocaleString('pt-BR');
-const AUTH_REDIRECT_URL = 'agendaplus://';
+const AUTH_REDIRECT_URL = 'agendaplus://confirmacao';
 
 function getLinkParameter(url: string, key: string): string | undefined {
   for (const fragment of url.split(/[?#]/).slice(1)) {
@@ -187,22 +217,29 @@ export default function Index() {
   const [duration, setDuration] = useState('30');
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState('');
+  const [profilePhone, setProfilePhone] = useState('');
+  const [street, setStreet] = useState('');
+  const [streetNumber, setStreetNumber] = useState('');
+  const [neighborhood, setNeighborhood] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [postalCode, setPostalCode] = useState('');
+  const [addressExtra, setAddressExtra] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedHour, setSelectedHour] = useState('');
   const [availableDates] = useState(upcomingDates);
-  const visibleServices = useMemo(() => {
-    const query = searchTerm.trim().toLocaleLowerCase('pt-BR');
-    if (!query) return services;
-    return services.filter((service) => [service.name, service.companies?.display_name]
-      .some((value) => (value || '').toLocaleLowerCase('pt-BR').includes(query)));
-  }, [searchTerm, services]);
+  const visibleServices = services;
   const pendingCount = useMemo(() => bookings.filter((booking) => booking.status === 'pending').length, [bookings]);
 
   useEffect(() => {
     let alive = true;
     let lastProcessedUrl: string | null = null;
     async function handleAuthUrl(url: string | null) {
-      if (!alive || !url || !url.startsWith('agendaplus:') || url === lastProcessedUrl) return;
+      if (!alive || !url || !url.startsWith('agendaplus:') || url.includes('://confirmacao') || url === lastProcessedUrl) return;
       lastProcessedUrl = url;
       const error = getLinkParameter(url, 'error_description');
       if (error) {
@@ -251,7 +288,7 @@ export default function Index() {
 
   const loadData = useCallback(async (user: User) => {
     const { data: existing, error: profileError } = await supabase
-      .from('profiles').select('id,full_name,phone,account_type')
+      .from('profiles').select('id,full_name,phone,account_type,avatar_path')
       .eq('id', user.id).maybeSingle();
     if (profileError) throw profileError;
 
@@ -267,20 +304,26 @@ export default function Index() {
           phone: metadata.phone || null,
           account_type: accountType,
         })
-        .select('id,full_name,phone,account_type').single();
+        .select('id,full_name,phone,account_type,avatar_path').single();
       if (createdError) throw createdError;
       nextProfile = created as Profile;
     }
     setProfile(nextProfile);
+    setProfileName(nextProfile.full_name);
+    setProfilePhone(nextProfile.phone || '');
 
     if (nextProfile.account_type === 'empresa') {
       const { data: owned, error: companyError } = await supabase
-        .from('companies').select('id,display_name,category')
+        .from('companies').select('id,display_name,category,street,street_number,neighborhood,city,state,postal_code,address_extra')
         .eq('owner_id', user.id).maybeSingle();
       if (companyError) throw companyError;
       const nextCompany = (owned as Company | null) ?? null;
       setCompany(nextCompany);
       if (nextCompany) {
+        setStreet(nextCompany.street || ''); setStreetNumber(nextCompany.street_number || '');
+        setNeighborhood(nextCompany.neighborhood || ''); setCity(nextCompany.city || '');
+        setState(nextCompany.state || ''); setPostalCode(nextCompany.postal_code || '');
+        setAddressExtra(nextCompany.address_extra || '');
         const [serviceResult, bookingResult] = await Promise.all([
           supabase.from('services').select('id,company_id,name,duration_minutes,price_cents,is_active')
             .eq('company_id', nextCompany.id).order('created_at', { ascending: false }).limit(80),
@@ -297,20 +340,65 @@ export default function Index() {
       }
     } else {
       setCompany(null);
-      const [serviceResult, bookingResult] = await Promise.all([
-        supabase.from('services')
-          .select('id,company_id,name,duration_minutes,price_cents,is_active,companies(display_name)')
-          .eq('is_active', true).order('name').limit(80),
-        supabase.from('bookings')
-          .select('id,service_id,client_id,client_name,starts_at,ends_at,status,services(name),companies(display_name)')
-          .eq('client_id', user.id).order('starts_at', { ascending: false }).limit(100),
-      ]);
-      if (serviceResult.error) throw serviceResult.error;
-      if (bookingResult.error) throw bookingResult.error;
-      setServices((serviceResult.data ?? []) as unknown as Service[]);
-      setBookings((bookingResult.data ?? []) as unknown as Booking[]);
+      const { data: bookingData, error: bookingError } = await supabase.from('bookings')
+        .select('id,service_id,client_id,client_name,starts_at,ends_at,status,services(name),companies(display_name)')
+        .eq('client_id', user.id).order('starts_at', { ascending: false }).limit(200);
+      if (bookingError) throw bookingError;
+      setBookings((bookingData ?? []) as unknown as Booking[]);
     }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const path = profile?.avatar_path;
+    if (!path) { setAvatarUrl(null); return; }
+    supabase.storage.from('profile-photos').createSignedUrl(path, 60 * 60)
+      .then(({ data, error }) => {
+        if (!cancelled) setAvatarUrl(error ? null : (data?.signedUrl || null));
+      })
+      .catch(() => { if (!cancelled) setAvatarUrl(null); });
+    return () => { cancelled = true; };
+  }, [profile?.avatar_path]);
+
+  useEffect(() => {
+    if (!session?.user || profile?.account_type !== 'cliente') return;
+    const query = searchTerm.trim();
+    if (query.length < 2) {
+      setServices([]);
+      setSearching(false);
+      setSearchError('');
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSearching(true); setSearchError('');
+      try {
+        const commonSelect = 'id,company_id,name,duration_minutes,price_cents,is_active,companies(display_name,street,street_number,neighborhood,city,state,postal_code,address_extra)';
+        const [namedCompanies, namedServices] = await Promise.all([
+          supabase.from('companies').select('id').eq('is_active', true)
+            .ilike('display_name', `%${query}%`).limit(30),
+          supabase.from('services').select(commonSelect)
+            .eq('is_active', true).ilike('name', `%${query}%`).limit(40),
+        ]);
+        if (namedCompanies.error) throw namedCompanies.error;
+        if (namedServices.error) throw namedServices.error;
+        const ids = (namedCompanies.data || []).map((item) => item.id);
+        let matched = (namedServices.data || []) as unknown as Service[];
+        if (ids.length) {
+          const byCompany = await supabase.from('services').select(commonSelect)
+            .eq('is_active', true).in('company_id', ids).limit(70);
+          if (byCompany.error) throw byCompany.error;
+          matched = [...matched, ...((byCompany.data || []) as unknown as Service[])];
+        }
+        if (!cancelled) {
+          setServices(Array.from(new Map(matched.map((item) => [item.id, item])).values()));
+        }
+      } catch {
+        if (!cancelled) { setServices([]); setSearchError('Não foi possível pesquisar agora. Tente novamente.'); }
+      } finally { if (!cancelled) setSearching(false); }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [searchTerm, profile?.account_type, session?.user.id]);
 
   useEffect(() => {
     let active = true;
@@ -426,10 +514,17 @@ export default function Index() {
     }
     setBusy(true);
     try {
+      if (!street.trim() || !neighborhood.trim() || !city.trim() || !state.trim()) {
+        return Alert.alert('Complete o endereço', 'Informe rua, bairro, cidade e estado para ajudar os clientes a encontrar a empresa.');
+      }
       const { error } = await supabase.from('companies').insert({
         owner_id: session.user.id,
         display_name: companyName.trim(),
         category: category.trim() || 'Serviços',
+        street: street.trim(), street_number: streetNumber.trim() || null,
+        neighborhood: neighborhood.trim(), city: city.trim(),
+        state: state.trim().toUpperCase(), postal_code: postalCode.trim() || null,
+        address_extra: addressExtra.trim() || null,
       });
       if (error) throw error;
       setCompanyName(''); setCategory('');
@@ -437,6 +532,93 @@ export default function Index() {
       Alert.alert('Empresa cadastrada', 'Agora você já pode cadastrar os seus serviços.');
     } catch (e) { Alert.alert('Erro ao salvar empresa', String((e as Error).message)); }
     finally { setBusy(false); }
+  }
+
+  async function saveCompanyAddress() {
+    if (!company || !session?.user) return;
+    if (!street.trim() || !neighborhood.trim() || !city.trim() || !state.trim()) {
+      return Alert.alert('Confira o endereço', 'Rua, bairro, cidade e estado são obrigatórios.');
+    }
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.from('companies').update({
+        street: street.trim(), street_number: streetNumber.trim() || null,
+        neighborhood: neighborhood.trim(), city: city.trim(), state: state.trim().toUpperCase(),
+        postal_code: postalCode.trim() || null, address_extra: addressExtra.trim() || null,
+      }).eq('id', company.id).eq('owner_id', session.user.id)
+        .select('id,display_name,category,street,street_number,neighborhood,city,state,postal_code,address_extra').single();
+      if (error) throw error;
+      setCompany(data as Company);
+      Alert.alert('Endereço atualizado', 'Agora seus clientes podem encontrá-lo no mapa.');
+    } catch (e) { Alert.alert('Não foi possível salvar', String((e as Error).message)); }
+    finally { setBusy(false); }
+  }
+
+  async function saveMyProfile() {
+    if (!session?.user || profileName.trim().length < 2) {
+      return Alert.alert('Informe um nome com pelo menos dois caracteres.');
+    }
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.from('profiles')
+        .update({ full_name: profileName.trim(), phone: profilePhone.trim() || null })
+        .eq('id', session.user.id)
+        .select('id,full_name,phone,account_type,avatar_path').single();
+      if (error) throw error;
+      setProfile(data as Profile);
+      Alert.alert('Perfil atualizado!', 'Suas informações foram salvas.');
+    } catch (e) { Alert.alert('Erro ao salvar perfil', String((e as Error).message)); }
+    finally { setBusy(false); }
+  }
+
+  async function uploadAvatar() {
+    if (!session?.user || !profile) return;
+    try {
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'], allowsEditing: true,
+        aspect: [1, 1], quality: 0.7, exif: false,
+      });
+      if (picked.canceled || !picked.assets.length) return;
+      const chosen = picked.assets[0];
+      if (chosen.fileSize && chosen.fileSize > 5 * 1024 * 1024) {
+        return Alert.alert('Imagem muito grande', 'Escolha uma foto de até 5 MB.');
+      }
+      setBusy(true);
+      const contentType = chosen.mimeType === 'image/png' ? 'image/png'
+        : chosen.mimeType === 'image/webp' ? 'image/webp' : 'image/jpeg';
+      const ext = contentType === 'image/png' ? 'png' : contentType === 'image/webp' ? 'webp' : 'jpg';
+      const filePath = `${session.user.id}/${Date.now()}.${ext}`;
+      const response = await fetch(chosen.uri);
+      if (!response.ok) throw new Error('Não foi possível ler a imagem escolhida.');
+      const bytes = await response.arrayBuffer();
+      if (bytes.byteLength > 5 * 1024 * 1024) {
+        return Alert.alert('Imagem muito grande', 'Escolha uma foto de até 5 MB.');
+      }
+      const { error: uploadError } = await supabase.storage.from('profile-photos')
+        .upload(filePath, bytes, { contentType, upsert: false });
+      if (uploadError) throw uploadError;
+      const { data, error } = await supabase.from('profiles')
+        .update({ avatar_path: filePath }).eq('id', session.user.id)
+        .select('id,full_name,phone,account_type,avatar_path').single();
+      if (error) throw error;
+      setProfile(data as Profile);
+      Alert.alert('Foto atualizada!', 'Sua foto foi salva no perfil.');
+    } catch (e) { Alert.alert('Erro ao enviar foto', String((e as Error).message)); }
+    finally { setBusy(false); }
+  }
+
+  function AddressFields() {
+    return (
+      <>
+        <Field label="Rua / Avenida" value={street} onChangeText={setStreet} placeholder="Ex.: Rua XV de Novembro" />
+        <Field label="Número" value={streetNumber} onChangeText={setStreetNumber} keyboardType="number-pad" placeholder="Ex.: 123" />
+        <Field label="Bairro" value={neighborhood} onChangeText={setNeighborhood} placeholder="Ex.: Centro" />
+        <Field label="Cidade" value={city} onChangeText={setCity} placeholder="Ex.: Curitiba" />
+        <Field label="Estado (UF)" value={state} onChangeText={setState} placeholder="Ex.: PR" />
+        <Field label="CEP (opcional)" value={postalCode} onChangeText={setPostalCode} keyboardType="number-pad" placeholder="Ex.: 80000-000" />
+        <Field label="Complemento (opcional)" value={addressExtra} onChangeText={setAddressExtra} placeholder="Ex.: Sala 12" />
+      </>
+    );
   }
 
   async function createService() {
