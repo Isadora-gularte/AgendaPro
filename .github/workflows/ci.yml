@@ -6,6 +6,7 @@ on:
       - main
       - audit/supabase-integration
       - feature/android-v0.2-testing
+      - feature/agenda-perfil-busca-v0.3.0
   pull_request:
 
 jobs:
