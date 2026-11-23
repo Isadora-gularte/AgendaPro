@@ -1,0 +1,37 @@
+{
+  "name": "agenda-plus-notebook",
+  "version": "0.3.0",
+  "description": "Agenda+ para Windows - versão de testes",
+  "main": "main.cjs",
+  "author": "Agenda+",
+  "license": "UNLICENSED",
+  "private": true,
+  "build": {
+    "appId": "com.agendaplus.desktop",
+    "productName": "Agenda+",
+    "asar": true,
+    "directories": {
+      "output": "../windows-release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "artifactName": "AgendaPlus-v0.3.0-Notebook.exe"
+  },
+  "devDependencies": {
+    "electron": "38.0.0",
+    "electron-builder": "26.0.12"
+  }
+}
