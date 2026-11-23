@@ -13,9 +13,9 @@ permissions:
   contents: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 90
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
     env:
       CI: '1'
       EXPO_PUBLIC_SUPABASE_URL: https://wpgwopmfvthrxuzilxdw.supabase.co
@@ -27,25 +27,53 @@ jobs:
         with:
           node-version: '20.19.4'
           cache: npm
-      - name: Install Agenda+ dependencies
+      - name: Install dependencies
         run: npm ci
       - name: Verify TypeScript
         run: npm run typecheck
-      - name: Build Agenda+ web app
+      - name: Export Agenda+ for notebook
         run: npx expo export --platform web
-      - name: Package Agenda+ as Windows portable app
+      - name: Stage Windows-compatible application files
+        run: |
+          mkdir -p desktop-package
+          cp desktop/main.cjs desktop-package/main.cjs
+          cp desktop/package.json desktop-package/package.json
+          cp -a dist desktop-package/dist
+          test -s desktop-package/dist/index.html
+      - name: Upload web app for Windows packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgendaPlus-Windows-Source
+          path: desktop-package/
+          if-no-files-found: error
+          retention-days: 5
+
+  windows:
+    needs: web
+    runs-on: windows-latest
+    timeout-minutes: 70
+    steps:
+      - name: Download web app without checking out invalid Windows filenames
+        uses: actions/download-artifact@v4
+        with:
+          name: AgendaPlus-Windows-Source
+          path: desktop
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+      - name: Package as a Windows portable application
         shell: pwsh
         run: |
-          Copy-Item -Path dist -Destination desktop/dist -Recurse -Force
           Push-Location desktop
           npm install --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npx electron-builder --win portable --x64 --publish never
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Pop-Location
-          if (!(Test-Path windows-release/AgendaPlus-v0.3.0-Notebook.exe)) { throw 'Windows app was not created' }
+          if (!(Test-Path windows-release/AgendaPlus-v0.3.0-Notebook.exe)) { throw 'Windows application was not created' }
           Get-FileHash windows-release/AgendaPlus-v0.3.0-Notebook.exe -Algorithm SHA256
-      - name: Upload Windows executable for tests
+      - name: Upload installable Windows program
         uses: actions/upload-artifact@v4
         with:
           name: AgendaPlus-v0.3.0-Notebook-Windows
@@ -60,6 +88,6 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload v0.3.0-windows "windows-release/AgendaPlus-v0.3.0-Notebook.exe" --clobber --repo "${{ github.repository }}"
           } else {
-            gh release create v0.3.0-windows "windows-release/AgendaPlus-v0.3.0-Notebook.exe" --repo "${{ github.repository }}" --target "${{ github.sha }}" --prerelease --title "Agenda+ v0.3.0 — Notebook Windows (teste)" --notes "Aplicativo portátil para Windows 10/11. Abra o arquivo .exe sem Expo Go, Android ou ferramentas de programação. Utiliza a mesma conta e o mesmo banco Supabase do Agenda+ para Android. Confirmação por e-mail e SMTP seguem com configuração pendente. Aplicativo de testes sem assinatura comercial."
+            gh release create v0.3.0-windows "windows-release/AgendaPlus-v0.3.0-Notebook.exe" --repo "${{ github.repository }}" --target "${{ github.sha }}" --prerelease --title "Agenda+ v0.3.0 — Notebook Windows (teste)" --notes "Aplicativo portátil para Windows 10/11. Abra o .exe sem Expo Go, Android ou ferramentas de programação. Usa a mesma conta e o mesmo banco Supabase do Agenda+ para Android. Confirmação por e-mail e SMTP seguem com configuração pendente. Esta versão de testes não possui assinatura comercial."
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
